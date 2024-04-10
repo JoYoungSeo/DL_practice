@@ -25,37 +25,35 @@ mycursor = con.cursor()
 #                     where 종목명 = "삼성전자");""", con = engine)
 
 data = pd.read_sql("""SELECT * FROM kor_price
-                   where 종목코드 IN (SELECT 종목코드
+                   where 날짜 > "2018-01-01" and
+                   종목코드 IN (SELECT 종목코드
                    FROM (SELECT 종목코드
                          FROM kor_ticker
                          ORDER BY 시가총액 DESC
-                         LIMIT 30) AS t);""", con = engine)
+                         LIMIT 100) AS t);""", con = engine)
 
 engine.dispose()
 con.close()
 
-data_code = data["종목코드"].values
-final_df= pd.DataFrame()
-
+data_code = set(data["종목코드"].values)
+final_df = pd.DataFrame()
 for code in tqdm(data_code):
-
+    temp_data = pd.DataFrame(data[data["종목코드"] == code]["종가"]).reset_index()
 
     # 단순 이동평균
-    data[data["종목코드"] == code]["SMA_5"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 5)
-    data[data["종목코드"] == code]["SMA_20"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 20)
-    data[data["종목코드"] == code]["SMA_60"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 60)
-    data[data["종목코드"] == code]["SMA_90"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 90)
-    data[data["종목코드"] == code]["SMA_120"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 120)
+    temp_data["SMA_5"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 5)
+    temp_data["SMA_20"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 20)
+    temp_data["SMA_60"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 60)
+    temp_data["SMA_120"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 120)
 
     # 지수 이동평균
-    data[data["종목코드"] == code]["EMA_5"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 5)
-    data[data["종목코드"] == code]["EMA_20"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 20)
-    data[data["종목코드"] == code]["EMA_60"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 60)
-    data[data["종목코드"] == code]["EMA_90"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 90)
-    data[data["종목코드"] == code]["EMA_120"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 120)
+    temp_data["EMA_5"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 5)
+    temp_data["EMA_20"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 20)
+    temp_data["EMA_60"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 60)
+    temp_data["EMA_120"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 120)
 
     # 상대 강도 지수 (RSI)
-    data[data["종목코드"] == code]["RSI_14"] = talib.RSI(np.array(data[data["종목코드"] == code]["종가"]), 14)
+    temp_data["RSI_14"] = talib.RSI(np.array(data[data["종목코드"] == code]["종가"]), 14)
 
     # 볼린저밴드
     upper_2sd, mid_2sd, lower_2sd = talib.BBANDS(np.array(data[data["종목코드"] == code]["종가"]), 
@@ -63,12 +61,14 @@ for code in tqdm(data_code):
                                                 nbdevdn = 2,
                                                 timeperiod = 20)
 
-    bb = pd.concat([pd.Series(upper_2sd), pd.Series(mid_2sd), pd.Series(lower_2sd), pd.DataFrame(np.array(data[data["종목코드"] == code]["종가"]))], axis = 1)
-    bb.columns = ["Upper Band", "Mid Band", "Lower Band", "종가"]
+    bb = pd.concat([pd.Series(upper_2sd), pd.Series(mid_2sd), pd.Series(lower_2sd)], axis = 1)
+    bb.columns = ["Upper Band", "Mid Band", "Lower Band"]
 
-    df = pd.concat([data[data["종목코드"] == code].reset_index(), bb], axis = 1)
+    df = pd.concat([temp_data.iloc[120:, :], bb.iloc[120:, :]], axis = 1)
 
-    final_df = pd.concat([final_df, df], axis = 1)
+    final_df = pd.concat([final_df, df], axis = 0)
+ 
+df = final_df
 
 df['Target'] = ((df['종가'].shift(-1) / df['종가']) - 1) > 0.03
 df['Target'] = df['Target'].astype(int)
@@ -78,19 +78,17 @@ reshaped_features = []
 reshaped_targets = []
 
 # Loop through the DataFrame, starting from the 10th day to the second to last day (since we're predicting D+1)
-for i in range(10, len(df) - 1):
+for i in tqdm(range(10, len(df) - 1)):
     # Extract the last 10 days + current day for 'Close' and each EMA
     window_close = df['종가'][i-10:i+1].to_list()
     window_sma_5 = df['SMA_5'][i-10:i+1].to_list()
     window_sma_20 = df['SMA_20'][i-10:i+1].to_list()
     window_sma_60 = df['SMA_60'][i-10:i+1].to_list()
-    window_sma_90 = df['SMA_90'][i-10:i+1].to_list()
     window_sma_120 = df['SMA_120'][i-10:i+1].to_list()
 
     window_ema_5 = df['EMA_5'][i-10:i+1].to_list()
     window_ema_20 = df['EMA_20'][i-10:i+1].to_list()
     window_ema_60 = df['EMA_60'][i-10:i+1].to_list()
-    window_ema_90 = df['EMA_90'][i-10:i+1].to_list()
     window_ema_120 = df['EMA_120'][i-10:i+1].to_list()
 
     window_RSI = df["RSI_14"][i-10:i+1].to_list()
@@ -99,8 +97,8 @@ for i in range(10, len(df) - 1):
     window_lower = df["Lower Band"][i-10:i+1].to_list()
 
     # Flatten this window of data and append to our reshaped features list
-    feature_row = (window_close + window_sma_5 + window_sma_20 + window_sma_60 + window_sma_90 + window_sma_120 +
-                window_ema_5 + window_ema_20 + window_ema_60 + window_ema_90 + window_ema_120 + window_RSI + 
+    feature_row = (window_close + window_sma_5 + window_sma_20 + window_sma_60 + window_sma_120 +
+                window_ema_5 + window_ema_20 + window_ema_60 + window_ema_120 + window_RSI + 
                 window_upper + winow_mid + window_lower)
     reshaped_features.append(feature_row)
     
@@ -111,14 +109,47 @@ for i in range(10, len(df) - 1):
 reshaped_df = pd.DataFrame(reshaped_features)
 reshaped_df['Target'] = reshaped_targets
 
-X = reshaped_df.iloc[120:, :-1]
-y = reshaped_df.iloc[120:, -1]
+reshaped_df["Target"].value_counts()
 
+# 컬럼 이름 생성기
+col_names = []
+indic_dict = {1:"close", 2:"sma_5", 3:"sma_20", 4:"sma_60", 5:"sma_120", 
+              6:"ema_5", 7:"ema_20", 8:"ema_60", 9:"ema_120", 10:"rsi_14", 
+              11:"upper_band", 12:"mid_band", 13:"lower_band"}
+cnt = 1
+for i in range(13):
+    for j in range(10, 0, -1):
+        tmp = f"D-{j}_{indic_dict[cnt]}"
+        col_names.append(tmp)
+    col_names.append(f"D-day_{indic_dict[cnt]}")
+    cnt += 1 
+
+len(col_names)
+
+X = reshaped_df.iloc[:, :-1]
+y = reshaped_df.iloc[:, -1]
+
+X.columns = col_names
+
+# 10-window min-max normalizarion
+def min_max_10_window(row):
+    max_v = max(row)
+    min_v = min(row)
+    if max_v == min_v:
+        return 0
+    return ((row - min_v) / (max_v - min_v))
+
+X_temp = pd.DataFrame()
+for i in tqdm(range(11, 144, 11)):
+    tmp = X.iloc[:, i - 11:i].apply(min_max_10_window, axis = 1)
+    X_temp = pd.concat([X_temp, tmp], axis = 1)
+    
+X = X_temp
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3)
 
-scaler = StandardScaler()
-scaler.fit_transform(X_train)
-scaler.transform(X_test)
+# scaler = StandardScaler()
+# scaler.fit_transform(X_train)
+# scaler.transform(X_test)
 
 smote = SMOTE(random_state=42)
 X_train_over, y_train_over = smote.fit_resample(X_train, y_train)
@@ -141,3 +172,9 @@ cm2 = confusion_matrix(y_test, y_pred2)
 print("오버샘플링 적용 O\n", cm2)
 cm2_rp = classification_report(y_test, y_pred2)
 print(cm2_rp)
+
+with open('C:/Users/pamda/OneDrive/바탕 화면/python/output1.txt', 'a', encoding='utf-8') as file:
+    file.write(f"\n24_04_10_ver2\n{cm1_rp}")
+
+with open('C:/Users/pamda/OneDrive/바탕 화면/python/output2.txt', 'a', encoding='utf-8') as file:
+    file.write(f"\n24_04_10_ver2\n{cm2_rp}" )

@@ -9,6 +9,7 @@ from sklearn.neural_network import MLPClassifier
 from imblearn.over_sampling import SMOTE
 from sklearn.metrics import classification_report, confusion_matrix, precision_score, recall_score, f1_score
 import talib
+from tqdm import tqdm
 
 # DB 연결
 engine = create_engine("mysql+pymysql://root:6826@127.0.0.1:3306/stock_db")
@@ -19,40 +20,55 @@ con = pymysql.connect(user = "root",
                       charset = "utf8")
 mycursor = con.cursor()
 
-data = pd.read_sql("""select * from kor_price
-                    where 종목코드 = (select 종목코드 from kor_ticker
-                    where 종목명 = "삼성전자");""", con = engine)
+# data = pd.read_sql("""select * from kor_price
+#                     where 종목코드 = (select 종목코드 from kor_ticker
+#                     where 종목명 = "삼성전자");""", con = engine)
+
+data = pd.read_sql("""SELECT * FROM kor_price
+                   where 종목코드 IN (SELECT 종목코드
+                   FROM (SELECT 종목코드
+                         FROM kor_ticker
+                         ORDER BY 시가총액 DESC
+                         LIMIT 30) AS t);""", con = engine)
+
 engine.dispose()
 con.close()
 
-# 단순 이동평균
-data["SMA_5"] = talib.SMA(np.array(data["종가"]), 5)
-data["SMA_20"] = talib.SMA(np.array(data["종가"]), 20)
-data["SMA_60"] = talib.SMA(np.array(data["종가"]), 60)
-data["SMA_90"] = talib.SMA(np.array(data["종가"]), 90)
-data["SMA_120"] = talib.SMA(np.array(data["종가"]), 120)
+data_code = data["종목코드"].values
+final_df= pd.DataFrame()
 
-# 지수 이동평균
-data["EMA_5"] = talib.EMA(np.array(data["종가"]), 5)
-data["EMA_20"] = talib.EMA(np.array(data["종가"]), 20)
-data["EMA_60"] = talib.EMA(np.array(data["종가"]), 60)
-data["EMA_90"] = talib.EMA(np.array(data["종가"]), 90)
-data["EMA_120"] = talib.EMA(np.array(data["종가"]), 120)
+for code in tqdm(data_code):
 
-# 상대 강도 지수 (RSI)
-data["RSI_14"] = talib.RSI(np.array(data["종가"]), 14)
 
-# 볼린저밴드
-upper_2sd, mid_2sd, lower_2sd = talib.BBANDS(np.array(data["종가"]), 
-                                             nbdevup = 2,
-                                             nbdevdn = 2,
-                                             timeperiod = 20)
+    # 단순 이동평균
+    data[data["종목코드"] == code]["SMA_5"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 5)
+    data[data["종목코드"] == code]["SMA_20"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 20)
+    data[data["종목코드"] == code]["SMA_60"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 60)
+    data[data["종목코드"] == code]["SMA_90"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 90)
+    data[data["종목코드"] == code]["SMA_120"] = talib.SMA(np.array(data[data["종목코드"] == code]["종가"]), 120)
 
-bb = pd.concat([pd.Series(upper_2sd), pd.Series(mid_2sd), pd.Series(lower_2sd), pd.DataFrame(np.array(data["종가"]))], axis = 1)
-bb.columns = ["Upper Band", "Mid Band", "Lower Band", "Close"]
-bb
+    # 지수 이동평균
+    data[data["종목코드"] == code]["EMA_5"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 5)
+    data[data["종목코드"] == code]["EMA_20"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 20)
+    data[data["종목코드"] == code]["EMA_60"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 60)
+    data[data["종목코드"] == code]["EMA_90"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 90)
+    data[data["종목코드"] == code]["EMA_120"] = talib.EMA(np.array(data[data["종목코드"] == code]["종가"]), 120)
 
-df = pd.concat([data, bb], axis = 1)
+    # 상대 강도 지수 (RSI)
+    data[data["종목코드"] == code]["RSI_14"] = talib.RSI(np.array(data[data["종목코드"] == code]["종가"]), 14)
+
+    # 볼린저밴드
+    upper_2sd, mid_2sd, lower_2sd = talib.BBANDS(np.array(data[data["종목코드"] == code]["종가"]), 
+                                                nbdevup = 2,
+                                                nbdevdn = 2,
+                                                timeperiod = 20)
+
+    bb = pd.concat([pd.Series(upper_2sd), pd.Series(mid_2sd), pd.Series(lower_2sd), pd.DataFrame(np.array(data[data["종목코드"] == code]["종가"]))], axis = 1)
+    bb.columns = ["Upper Band", "Mid Band", "Lower Band", "종가"]
+
+    df = pd.concat([data[data["종목코드"] == code].reset_index(), bb], axis = 1)
+
+    final_df = pd.concat([final_df, df], axis = 1)
 
 df['Target'] = ((df['종가'].shift(-1) / df['종가']) - 1) > 0.03
 df['Target'] = df['Target'].astype(int)
